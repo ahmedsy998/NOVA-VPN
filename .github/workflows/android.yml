@@ -24,28 +24,44 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Set up Android SDK
+      - name: Set up Android SDK command-line tools
         uses: android-actions/setup-android@v4
-        with:
-          packages: |
-            platform-tools
-            platforms;android-36.1
-            build-tools;36.0.0
 
-      - name: Verify Android SDK environment and licenses
+      - name: Accept Android SDK licenses and install required packages
         run: |
           set -euo pipefail
           SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-          echo "ANDROID_HOME=${ANDROID_HOME:-}"
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
-          echo "Resolved SDK_DIR=${SDK_DIR}"
           if [ ! -d "${SDK_DIR}" ]; then
             echo "::error::Android SDK directory not found at ${SDK_DIR}"
             exit 1
           fi
           echo "ANDROID_HOME=${SDK_DIR}" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=${SDK_DIR}" >> "$GITHUB_ENV"
-          (yes || true) | sdkmanager --licenses >/dev/null || true
+
+          # Accept SDK licenses non-interactively before package installation
+          (yes || true) | sdkmanager --sdk_root="${SDK_DIR}" --licenses >/dev/null
+
+          # Install each required SDK package as an independent, properly quoted argument
+          sdkmanager --sdk_root="${SDK_DIR}" --install \
+            "platform-tools" \
+            "platforms;android-36.1" \
+            "build-tools;36.0.0"
+
+      - name: Verify Android SDK diagnostics and installed packages
+        run: |
+          set -euo pipefail
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+          echo "sdkmanager path: $(command -v sdkmanager)"
+          sdkmanager --version
+          INSTALLED_PACKAGES="$(sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --list_installed)"
+          echo "${INSTALLED_PACKAGES}"
+          for pkg in "platform-tools" "platforms;android-36.1" "build-tools;36.0.0"; do
+            if ! printf '%s\n' "${INSTALLED_PACKAGES}" | grep -qF "${pkg}"; then
+              echo "::error::Required Android SDK package not installed: ${pkg}"
+              exit 1
+            fi
+          done
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
