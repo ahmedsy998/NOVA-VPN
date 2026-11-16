@@ -25,13 +25,27 @@ jobs:
           java-version: "21"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: |
+            platform-tools
+            platforms;android-36.1
+            build-tools;36.0.0
 
-      - name: Accept Android SDK licenses and install SDK components
+      - name: Verify Android SDK environment and licenses
         run: |
           set -euo pipefail
-          (yes || true) | sdkmanager --licenses >/dev/null
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" || true
+          SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+          echo "Resolved SDK_DIR=${SDK_DIR}"
+          if [ ! -d "${SDK_DIR}" ]; then
+            echo "::error::Android SDK directory not found at ${SDK_DIR}"
+            exit 1
+          fi
+          echo "ANDROID_HOME=${SDK_DIR}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${SDK_DIR}" >> "$GITHUB_ENV"
+          (yes || true) | sdkmanager --licenses >/dev/null || true
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -70,6 +84,9 @@ jobs:
             echo "release_supported=false" >> "$GITHUB_OUTPUT"
             echo "Release signing secrets not configured. Falling back to debug APK build."
           fi
+
+      - name: Resolve Gradle dependencies
+        run: ./gradlew :app:dependencies --configuration debugRuntimeClasspath --no-daemon >/dev/null
 
       - name: Run unit and Robolectric tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
