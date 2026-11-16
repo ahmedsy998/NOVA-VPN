@@ -1,0 +1,118 @@
+name: NOVA VPN Android CI
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    name: Build NOVA VPN Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses and install SDK components
+        run: |
+          set -euo pipefail
+          (yes || true) | sdkmanager --licenses >/dev/null
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" || true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant executable permission to gradlew
+        run: |
+          set -euo pipefail
+          if [ ! -f "./gradlew" ]; then
+            echo "::error::Gradle wrapper script (gradlew) is missing from the repository root."
+            exit 1
+          fi
+          chmod +x ./gradlew
+
+      - name: Prepare debug and optional release signing keystores
+        id: signing
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -f "debug.keystore.base64" ]; then
+            tr -d '[:space:]' < debug.keystore.base64 | base64 --decode > debug.keystore
+            echo "Decoded debug.keystore from debug.keystore.base64"
+          elif [ ! -f "debug.keystore" ]; then
+            echo "::error::Neither debug.keystore nor debug.keystore.base64 was found."
+            exit 1
+          fi
+
+          if [ -n "${RELEASE_KEYSTORE_BASE64}" ] && [ -n "${STORE_PASSWORD}" ] && [ -n "${KEY_PASSWORD}" ]; then
+            printf '%s' "${RELEASE_KEYSTORE_BASE64}" | tr -d '[:space:]' | base64 --decode > my-upload-key.jks
+            echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/my-upload-key.jks" >> "$GITHUB_ENV"
+            echo "release_supported=true" >> "$GITHUB_OUTPUT"
+            echo "Release signing secrets detected. Will build signed release APK."
+          else
+            echo "release_supported=false" >> "$GITHUB_OUTPUT"
+            echo "Release signing secrets not configured. Falling back to debug APK build."
+          fi
+
+      - name: Run unit and Robolectric tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Build signed release APK
+        if: steps.signing.outputs.release_supported == 'true'
+        env:
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Build debug APK (fallback)
+        if: steps.signing.outputs.release_supported != 'true'
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Locate and verify generated APK
+        id: locate_apk
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.signing.outputs.release_supported }}" = "true" ]; then
+            APK_CANDIDATE=$(find app/build/outputs/apk/release -maxdepth 2 -type f -name "*.apk" | head -n 1 || true)
+          else
+            APK_CANDIDATE=$(find app/build/outputs/apk/debug -maxdepth 2 -type f -name "*.apk" | head -n 1 || true)
+          fi
+
+          if [ -z "${APK_CANDIDATE}" ] || [ ! -f "${APK_CANDIDATE}" ]; then
+            echo "::error::APK build completed but no .apk file was found under app/build/outputs/apk/"
+            exit 1
+          fi
+
+          if [ ! -s "${APK_CANDIDATE}" ]; then
+            echo "::error::Generated APK at ${APK_CANDIDATE} is empty (0 bytes)."
+            exit 1
+          fi
+
+          echo "Exact APK output path: ${APK_CANDIDATE}"
+          ls -lh "${APK_CANDIDATE}"
+          echo "APK_PATH=${APK_CANDIDATE}" >> "$GITHUB_ENV"
+
+      - name: Upload NOVA VPN APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOVA-VPN-APK
+          path: ${{ env.APK_PATH }}
+          retention-days: 30
+          if-no-files-found: error
