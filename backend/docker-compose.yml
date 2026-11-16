@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: novavpn
+      POSTGRES_USER: novavpn
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME_STRONG_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U novavpn"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    ports:
+      - "8443:8443"
+
+volumes:
+  pgdata:

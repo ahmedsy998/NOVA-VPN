@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">NOVA VPN</string>
+    <string name="vpn_notification_channel_name">حالة اتصال VPN</string>
+    <string name="vpn_notification_channel_desc">يعرض حالة نفق VPN النشط وموقع الخادم وسرعة النقل المباشرة.</string>
+    <string name="vpn_notification_connected">متصل بـ %1$s (%2$s)</string>
+    <string name="vpn_notification_connecting">جارٍ إنشاء نفق WireGuard مشفّر…</string>
+    <string name="vpn_notification_disconnect">قطع الاتصال</string>
+</resources>

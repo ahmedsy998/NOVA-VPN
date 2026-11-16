@@ -1,0 +1,6 @@
+{
+  "name": "NOVA VPN",
+  "description": "Production-grade global Android VPN application with WireGuard tunnel engine, Arabic RTL & English LTR support, Smart Server Selection, and privacy protections.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

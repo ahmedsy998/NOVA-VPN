@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NOVA VPN — Infrastructure Control Plane</title>
+  <style>
+    :root {
+      --bg: #050914; --surface: #0b1224; --card: #111c36; --border: #23355e;
+      --cyan: #00e5ff; --blue: #3b82f6; --green: #10b981; --text: #f1f5f9; --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body { margin: 0; background: var(--bg); color: var(--text); padding: 28px; }
+    .wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 20px; }
+    header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+    h1 { margin: 0; font-size: 22px; letter-spacing: 0.08em; color: var(--cyan); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 20px; }
+    label { display: block; font-size: 12px; color: var(--muted); margin-top: 10px; }
+    input, select { width: 100%; margin-top: 4px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--card); color: var(--text); }
+    button { margin-top: 14px; width: 100%; padding: 12px; border: 0; border-radius: 10px; background: linear-gradient(90deg, var(--blue), var(--cyan)); color: #050914; font-weight: 700; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border); }
+    .pill { padding: 3px 10px; border-radius: 99px; font-size: 11px; font-weight: 600; background: rgba(16,185,129,0.16); color: var(--green); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>NOVA VPN • INFRASTRUCTURE ADMIN</h1>
+      <span class="pill">Zero-Logs Architecture</span>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <h3>Connection &amp; Admin Credentials</h3>
+        <label>Backend API Base URL</label>
+        <input id="apiBase" placeholder="https://vpn-api.yourdomain.com" />
+        <label>Admin API Key (X-Admin-API-Key)</label>
+        <input id="adminKey" type="password" placeholder="Enter ADMIN_API_KEY" />
+        <button onclick="loadServers()">Sync Deployed Nodes</button>
+      </div>
+
+      <div class="card">
+        <h3>Register / Update VPN Node</h3>
+        <label>Server ID</label><input id="srvId" placeholder="de-fra-01" />
+        <label>Country ISO (2-letter)</label><input id="iso" placeholder="DE" maxlength="2" />
+        <label>Country Name (EN / AR)</label><input id="cEn" placeholder="Germany" />
+        <input id="cAr" placeholder="ألمانيا" />
+        <label>Region Code</label>
+        <select id="region">
+          <option>MENA</option><option selected>EUROPE</option><option>NORTH_AMERICA</option>
+          <option>SOUTH_AMERICA</option><option>ASIA_PACIFIC</option><option>SUB_SAHARAN_AFRICA</option>
+          <option>CENTRAL_ASIA</option><option>CARIBBEAN_OCEANIA</option>
+        </select>
+        <label>City ID &amp; Names (EN / AR)</label>
+        <input id="cityId" placeholder="de-fra" />
+        <input id="cityEn" placeholder="Frankfurt" />
+        <input id="cityAr" placeholder="فرانكفورت" />
+        <label>Hostname &amp; WireGuard Endpoint</label>
+        <input id="host" placeholder="fra01.novavpn.net" />
+        <input id="epHost" placeholder="203.0.113.10" />
+        <input id="epPort" type="number" value="51820" />
+        <label>Server WireGuard Public Key (Base64)</label>
+        <input id="pubKey" placeholder="Base64 Curve25519 Public Key" />
+        <button onclick="deployServer()">Deploy / Update Server</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Deployed Global Nodes</h3>
+      <table>
+        <thead>
+          <tr><th>ID</th><th>Country</th><th>City</th><th>Endpoint</th><th>Status</th><th>Load</th></tr>
+        </thead>
+        <tbody id="nodesBody">
+          <tr><td colspan="6" style="color:var(--muted)">Configure API URL and click Sync Deployed Nodes.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <script>
+    async function loadServers() {
+      const base = document.getElementById('apiBase').value.trim().replace(/\/$/, '');
+      const res = await fetch(`${base}/api/v1/servers`);
+      const data = await res.json();
+      const tbody = document.getElementById('nodesBody');
+      tbody.innerHTML = (data.servers || []).map(s => `
+        <tr>
+          <td>${s.id}</td><td>${s.country_iso}</td><td>${s.city_name_en}</td>
+          <td>${s.endpoint_host}:${s.endpoint_port}</td>
+          <td><span class="pill">${s.status}</span></td>
+          <td>${s.load_percent ?? '--'}%</td>
+        </tr>
+      `).join('') || '<tr><td colspan="6">No servers deployed yet.</td></tr>';
+    }
+    async function deployServer() {
+      const base = document.getElementById('apiBase').value.trim().replace(/\/$/, '');
+      const key = document.getElementById('adminKey').value;
+      const body = {
+        id: document.getElementById('srvId').value,
+        country_iso: document.getElementById('iso').value.toUpperCase(),
+        country_name_en: document.getElementById('cEn').value,
+        country_name_ar: document.getElementById('cAr').value,
+        region_code: document.getElementById('region').value,
+        city_id: document.getElementById('cityId').value,
+        city_name_en: document.getElementById('cityEn').value,
+        city_name_ar: document.getElementById('cityAr').value,
+        hostname: document.getElementById('host').value,
+        endpoint_host: document.getElementById('epHost').value,
+        endpoint_port: Number(document.getElementById('epPort').value),
+        public_key: document.getElementById('pubKey').value,
+        status: 'ONLINE',
+        is_available: true
+      };
+      await fetch(`${base}/api/v1/admin/servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-API-Key': key },
+        body: JSON.stringify(body)
+      });
+      loadServers();
+    }
+  </script>
+</body>
+</html>
