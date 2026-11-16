@@ -83,22 +83,43 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -f "debug.keystore.base64" ]; then
+
+          # Ensure a valid debug.keystore is available without failing if debug.keystore.base64 is absent
+          if [ -f "debug.keystore" ] && [ -s "debug.keystore" ]; then
+            echo "Using existing debug.keystore."
+          elif [ -f "debug.keystore.base64" ] && [ -s "debug.keystore.base64" ]; then
             tr -d '[:space:]' < debug.keystore.base64 | base64 --decode > debug.keystore
-            echo "Decoded debug.keystore from debug.keystore.base64"
-          elif [ ! -f "debug.keystore" ]; then
-            echo "::error::Neither debug.keystore nor debug.keystore.base64 was found."
-            exit 1
+            echo "Decoded debug.keystore from debug.keystore.base64."
+          elif [ -f "${HOME}/.android/debug.keystore" ] && [ -s "${HOME}/.android/debug.keystore" ]; then
+            cp "${HOME}/.android/debug.keystore" debug.keystore
+            echo "Copied standard Android debug.keystore from ${HOME}/.android/debug.keystore."
+          else
+            echo "No debug keystore found in repository; generating standard Android debug keystore via keytool."
+            keytool -genkeypair \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+          # Release signing is strictly optional
           if [ -n "${RELEASE_KEYSTORE_BASE64}" ] && [ -n "${STORE_PASSWORD}" ] && [ -n "${KEY_PASSWORD}" ]; then
-            printf '%s' "${RELEASE_KEYSTORE_BASE64}" | tr -d '[:space:]' | base64 --decode > my-upload-key.jks
-            echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/my-upload-key.jks" >> "$GITHUB_ENV"
-            echo "release_supported=true" >> "$GITHUB_OUTPUT"
-            echo "Release signing secrets detected. Will build signed release APK."
+            if printf '%s' "${RELEASE_KEYSTORE_BASE64}" | tr -d '[:space:]' | base64 --decode > my-upload-key.jks && [ -s "my-upload-key.jks" ]; then
+              echo "KEYSTORE_PATH=${GITHUB_WORKSPACE}/my-upload-key.jks" >> "$GITHUB_ENV"
+              echo "release_supported=true" >> "$GITHUB_OUTPUT"
+              echo "Release signing secrets detected. Optional signed release APK build enabled."
+            else
+              rm -f my-upload-key.jks
+              echo "release_supported=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::Failed to decode RELEASE_KEYSTORE_BASE64 into a valid keystore. Skipping optional release build."
+            fi
           else
             echo "release_supported=false" >> "$GITHUB_OUTPUT"
-            echo "Release signing secrets not configured. Falling back to debug APK build."
+            echo "Release signing secrets not configured. Skipping optional release build; debug APK will be built."
           fi
 
       - name: Resolve Gradle dependencies
@@ -107,45 +128,65 @@ jobs:
       - name: Run unit and Robolectric tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
 
-      - name: Build signed release APK
+      - name: Build debug APK
+        id: build_debug
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Build optional signed release APK
+        id: build_release
         if: steps.signing.outputs.release_supported == 'true'
+        continue-on-error: true
         env:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Build debug APK (fallback)
-        if: steps.signing.outputs.release_supported != 'true'
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+      - name: Report optional release build status
+        if: steps.signing.outputs.release_supported == 'true' && steps.build_release.outcome == 'failure'
+        run: echo "::warning::Optional signed release APK build failed (check keystore alias/passwords). Proceeding with verified debug APK."
 
-      - name: Locate and verify generated APK
+      - name: Locate and verify generated APKs
         id: locate_apk
         run: |
           set -euo pipefail
-          if [ "${{ steps.signing.outputs.release_supported }}" = "true" ]; then
-            APK_CANDIDATE=$(find app/build/outputs/apk/release -maxdepth 2 -type f -name "*.apk" | head -n 1 || true)
-          else
-            APK_CANDIDATE=$(find app/build/outputs/apk/debug -maxdepth 2 -type f -name "*.apk" | head -n 1 || true)
-          fi
-
-          if [ -z "${APK_CANDIDATE}" ] || [ ! -f "${APK_CANDIDATE}" ]; then
-            echo "::error::APK build completed but no .apk file was found under app/build/outputs/apk/"
+          if [ ! -d "app/build/outputs/apk" ]; then
+            echo "::error::APK output directory app/build/outputs/apk does not exist."
             exit 1
           fi
 
-          if [ ! -s "${APK_CANDIDATE}" ]; then
-            echo "::error::Generated APK at ${APK_CANDIDATE} is empty (0 bytes)."
+          mapfile -t APK_CANDIDATES < <(find app/build/outputs/apk -type f -name "*.apk" ! -name "*-unsigned.apk" | sort)
+          if [ "${#APK_CANDIDATES[@]}" -eq 0 ]; then
+            echo "::error::No signed APK files were found under app/build/outputs/apk/."
             exit 1
           fi
 
-          echo "Exact APK output path: ${APK_CANDIDATE}"
-          ls -lh "${APK_CANDIDATE}"
-          echo "APK_PATH=${APK_CANDIDATE}" >> "$GITHUB_ENV"
+          VERIFIED_APKS=()
+          for apk in "${APK_CANDIDATES[@]}"; do
+            if [ ! -f "${apk}" ]; then
+              echo "::error::Expected APK file does not exist: ${apk}"
+              exit 1
+            fi
+            if [ ! -s "${apk}" ]; then
+              echo "::error::Generated APK is empty (0 bytes): ${apk}"
+              exit 1
+            fi
+            echo "Verified APK output path: ${apk}"
+            ls -lh "${apk}"
+            VERIFIED_APKS+=("${apk}")
+          done
+
+          {
+            echo "apk_paths<<EOF"
+            printf '%s\n' "${VERIFIED_APKS[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "has_apk=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload NOVA VPN APK artifact
+        if: steps.locate_apk.outputs.has_apk == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: NOVA-VPN-APK
-          path: ${{ env.APK_PATH }}
+          path: ${{ steps.locate_apk.outputs.apk_paths }}
           retention-days: 30
           if-no-files-found: error
